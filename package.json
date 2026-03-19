@@ -1,0 +1,26 @@
+{
+  "name": "cixi-mahjong-server",
+  "version": "1.0.0",
+  "description": "慈溪麻将游戏服务器 - 支持多人联机对战",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "keywords": [
+    "mahjong",
+    "cixi",
+    "game",
+    "socket.io"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
