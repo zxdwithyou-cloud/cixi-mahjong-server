@@ -606,6 +606,7 @@ function doHu(gameState, players, winner, targetTile, isZiMo, playedPlayerId) {
 io.on('connection', (socket) => {
   console.log('用户连接:', socket.id);
   
+  // 创建房间
   socket.on('create_room', ({ roomName, player, maxPlayers = 4, customRoomId }) => {
     const roomId = customRoomId?.trim() || 'room_' + Date.now().toString(36).substr(2, 8).toUpperCase();
     
@@ -634,6 +635,7 @@ io.on('connection', (socket) => {
     io.emit('room_list', Array.from(rooms.values()));
   });
   
+  // 加入房间
   socket.on('join_room', ({ roomId, player }) => {
     console.log('加入房间请求:', roomId, '玩家:', player.nickname);
     
@@ -644,8 +646,10 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // 检查玩家是否已经在房间中
     const existingPlayerIndex = room.players.findIndex(p => p.id === player.id);
     if (existingPlayerIndex >= 0) {
+      // 更新socketId
       room.players[existingPlayerIndex].socketId = socket.id;
       playerSockets.set(player.id, socket.id);
       socket.join(roomId);
@@ -660,32 +664,22 @@ io.on('connection', (socket) => {
     }
     
     const position = room.players.length;
-// 机器人自动准备
-const isBot = player.id.startsWith('bot_');
-const newPlayer = { ...player, position, socketId: socket.id, isReady: isBot };
-room.players.push(newPlayer);
-playerSockets.set(player.id, socket.id);
-
-socket.join(roomId);
-
-console.log('玩家加入房间:', roomId, player.nickname, '当前人数:', room.players.length, isBot ? '(机器人)' : '');
-
-io.to(roomId).emit('room_updated', room);
-io.to(roomId).emit('player_joined', newPlayer);
-io.emit('room_list', Array.from(rooms.values()));
-    const newPlayer = { ...player, position, socketId: socket.id, isReady: false };
+    // 机器人自动准备
+    const isBot = player.id.startsWith('bot_');
+    const newPlayer = { ...player, position, socketId: socket.id, isReady: isBot };
     room.players.push(newPlayer);
     playerSockets.set(player.id, socket.id);
     
     socket.join(roomId);
     
-    console.log('玩家加入房间:', roomId, player.nickname, '当前人数:', room.players.length);
+    console.log('玩家加入房间:', roomId, player.nickname, '当前人数:', room.players.length, isBot ? '(机器人)' : '');
     
     io.to(roomId).emit('room_updated', room);
     io.to(roomId).emit('player_joined', newPlayer);
     io.emit('room_list', Array.from(rooms.values()));
   });
   
+  // 离开房间
   socket.on('leave_room', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -705,6 +699,7 @@ io.emit('room_list', Array.from(rooms.values()));
         if (room.hostId === player.id && room.players.length > 0) {
           room.hostId = room.players[0].id;
         }
+        // 更新位置
         room.players.forEach((p, i) => { p.position = i; });
         io.to(roomId).emit('player_left', player.id);
         io.to(roomId).emit('room_updated', room);
@@ -715,6 +710,7 @@ io.emit('room_list', Array.from(rooms.values()));
     io.emit('room_list', Array.from(rooms.values()));
   });
   
+  // 玩家准备
   socket.on('player_ready', ({ roomId, playerId }) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -726,6 +722,24 @@ io.emit('room_list', Array.from(rooms.values()));
     }
   });
   
+  // 辅助函数：向每个玩家发送游戏状态，隐藏其他玩家的手牌
+  function emitGameStateToPlayers(room, gameState, eventName = 'game_state_updated') {
+    room.players.forEach(player => {
+      const playerSocketId = playerSockets.get(player.id);
+      if (playerSocketId) {
+        const playerRoom = {
+          ...room,
+          players: room.players.map(p => ({
+            ...p,
+            handTiles: p.id === player.id ? p.handTiles : [] // 只保留自己的手牌
+          }))
+        };
+        io.to(playerSocketId).emit(eventName, { room: playerRoom, gameState });
+      }
+    });
+  }
+  
+  // 开始游戏
   socket.on('start_game', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -735,9 +749,24 @@ io.emit('room_list', Array.from(rooms.values()));
     
     console.log('游戏开始:', roomId, '庄家:', gameState.dealer);
     
-    io.to(roomId).emit('game_started', { room, gameState });
+    // 为每个玩家单独发送数据，只包含他们自己的手牌
+    room.players.forEach(player => {
+      const playerSocketId = playerSockets.get(player.id);
+      if (playerSocketId) {
+        // 创建只包含该玩家手牌的房间数据
+        const playerRoom = {
+          ...room,
+          players: room.players.map(p => ({
+            ...p,
+            handTiles: p.id === player.id ? p.handTiles : [] // 只保留自己的手牌
+          }))
+        };
+        io.to(playerSocketId).emit('game_started', { room: playerRoom, gameState });
+      }
+    });
   });
   
+  // 摸牌
   socket.on('draw_tile', ({ roomId, playerId }) => {
     const room = rooms.get(roomId);
     if (!room || !room.gameState) return;
@@ -747,10 +776,11 @@ io.emit('room_list', Array.from(rooms.values()));
     
     const result = drawTile(room.gameState, player);
     if (result.success) {
-      io.to(roomId).emit('game_state_updated', { room, gameState: room.gameState });
+      emitGameStateToPlayers(room, room.gameState, 'game_state_updated');
     }
   });
   
+  // 打牌
   socket.on('play_tile', ({ roomId, playerId, tileId }) => {
     const room = rooms.get(roomId);
     if (!room || !room.gameState) return;
@@ -761,10 +791,11 @@ io.emit('room_list', Array.from(rooms.values()));
     const result = playTile(room.gameState, player, tileId);
     if (result.success) {
       room.gameState.currentPlayer = (room.gameState.currentPlayer + 1) % room.players.length;
-      io.to(roomId).emit('game_state_updated', { room, gameState: room.gameState });
+      emitGameStateToPlayers(room, room.gameState, 'game_state_updated');
     }
   });
   
+  // 吃
   socket.on('chi', ({ roomId, playerId, tiles, targetTile }) => {
     const room = rooms.get(roomId);
     if (!room || !room.gameState) return;
@@ -774,10 +805,11 @@ io.emit('room_list', Array.from(rooms.values()));
     
     const result = doChi(room.gameState, player, tiles, targetTile);
     if (result.success) {
-      io.to(roomId).emit('game_state_updated', { room, gameState: room.gameState });
+      emitGameStateToPlayers(room, room.gameState, 'game_state_updated');
     }
   });
   
+  // 碰
   socket.on('peng', ({ roomId, playerId, tiles, targetTile }) => {
     const room = rooms.get(roomId);
     if (!room || !room.gameState) return;
@@ -787,10 +819,11 @@ io.emit('room_list', Array.from(rooms.values()));
     
     const result = doPeng(room.gameState, player, tiles, targetTile);
     if (result.success) {
-      io.to(roomId).emit('game_state_updated', { room, gameState: room.gameState });
+      emitGameStateToPlayers(room, room.gameState, 'game_state_updated');
     }
   });
   
+  // 杠
   socket.on('gang', ({ roomId, playerId, tiles, targetTile, isAnGang }) => {
     const room = rooms.get(roomId);
     if (!room || !room.gameState) return;
@@ -801,10 +834,11 @@ io.emit('room_list', Array.from(rooms.values()));
     const result = doGang(room.gameState, player, tiles, targetTile, isAnGang);
     if (result.success) {
       drawTile(room.gameState, player);
-      io.to(roomId).emit('game_state_updated', { room, gameState: room.gameState });
+      emitGameStateToPlayers(room, room.gameState, 'game_state_updated');
     }
   });
   
+  // 胡
   socket.on('hu', ({ roomId, playerId, targetTile, isZiMo, playedPlayerId }) => {
     const room = rooms.get(roomId);
     if (!room || !room.gameState) return;
@@ -814,6 +848,7 @@ io.emit('room_list', Array.from(rooms.values()));
     
     const results = doHu(room.gameState, room.players, player, targetTile, isZiMo, playedPlayerId);
     if (results.length > 0) {
+      // 连庄处理
       if (isZiMo && room.gameState.dealer === room.players.findIndex(p => p.id === playerId)) {
         room.lianZhuangCount++;
       } else {
@@ -824,14 +859,16 @@ io.emit('room_list', Array.from(rooms.values()));
     }
   });
   
+  // 过
   socket.on('pass', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room || !room.gameState) return;
     
     room.gameState.currentPlayer = (room.gameState.currentPlayer + 1) % room.players.length;
-    io.to(roomId).emit('game_state_updated', { room, gameState: room.gameState });
+    emitGameStateToPlayers(room, room.gameState, 'game_state_updated');
   });
   
+  // 聊天消息
   socket.on('chat_message', ({ roomId, message }) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -839,10 +876,12 @@ io.emit('room_list', Array.from(rooms.values()));
     io.to(roomId).emit('chat_message', message);
   });
   
+  // 获取房间列表
   socket.on('get_room_list', () => {
     socket.emit('room_list', Array.from(rooms.values()));
   });
   
+  // 语音相关
   socket.on('voice_join', ({ roomId, playerId }) => {
     socket.to(roomId).emit('voice_join', { playerId });
   });
@@ -872,9 +911,11 @@ io.emit('room_list', Array.from(rooms.values()));
     }
   });
   
+  // 断开连接
   socket.on('disconnect', () => {
     console.log('用户断开连接:', socket.id);
     
+    // 从所有房间中移除该玩家
     rooms.forEach((room, roomId) => {
       const playerIndex = room.players.findIndex(p => p.socketId === socket.id);
       if (playerIndex !== -1) {
@@ -891,6 +932,7 @@ io.emit('room_list', Array.from(rooms.values()));
           if (room.hostId === player.id && room.players.length > 0) {
             room.hostId = room.players[0].id;
           }
+          // 更新位置
           room.players.forEach((p, i) => { p.position = i; });
           io.to(roomId).emit('player_left', player.id);
           io.to(roomId).emit('room_updated', room);
