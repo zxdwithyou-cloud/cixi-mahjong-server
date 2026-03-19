@@ -724,17 +724,30 @@ io.on('connection', (socket) => {
   
   // 辅助函数：向每个玩家发送游戏状态，隐藏其他玩家的手牌
   function emitGameStateToPlayers(room, gameState, eventName = 'game_state_updated') {
+    // 获取所有真实玩家（非机器人）的唯一socketId
+    const realPlayerSocketIds = new Set();
     room.players.forEach(player => {
-      const playerSocketId = playerSockets.get(player.id);
-      if (playerSocketId) {
+      if (!player.id.startsWith('bot_')) {
+        const socketId = playerSockets.get(player.id);
+        if (socketId) {
+          realPlayerSocketIds.add(socketId);
+        }
+      }
+    });
+    
+    // 向每个真实玩家发送数据
+    realPlayerSocketIds.forEach(socketId => {
+      // 找到该socket对应的真实玩家
+      const realPlayer = room.players.find(p => playerSockets.get(p.id) === socketId && !p.id.startsWith('bot_'));
+      if (realPlayer) {
         const playerRoom = {
           ...room,
           players: room.players.map(p => ({
             ...p,
-            handTiles: p.id === player.id ? p.handTiles : [] // 只保留自己的手牌
+            handTiles: p.id === realPlayer.id ? p.handTiles : [] // 只保留自己的手牌
           }))
         };
-        io.to(playerSocketId).emit(eventName, { room: playerRoom, gameState });
+        io.to(socketId).emit(eventName, { room: playerRoom, gameState });
       }
     });
   }
@@ -749,21 +762,8 @@ io.on('connection', (socket) => {
     
     console.log('游戏开始:', roomId, '庄家:', gameState.dealer);
     
-    // 为每个玩家单独发送数据，只包含他们自己的手牌
-    room.players.forEach(player => {
-      const playerSocketId = playerSockets.get(player.id);
-      if (playerSocketId) {
-        // 创建只包含该玩家手牌的房间数据
-        const playerRoom = {
-          ...room,
-          players: room.players.map(p => ({
-            ...p,
-            handTiles: p.id === player.id ? p.handTiles : [] // 只保留自己的手牌
-          }))
-        };
-        io.to(playerSocketId).emit('game_started', { room: playerRoom, gameState });
-      }
-    });
+    // 使用emitGameStateToPlayers发送数据
+    emitGameStateToPlayers(room, gameState, 'game_started');
   });
   
   // 摸牌
