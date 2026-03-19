@@ -660,6 +660,19 @@ io.on('connection', (socket) => {
     }
     
     const position = room.players.length;
+// 机器人自动准备
+const isBot = player.id.startsWith('bot_');
+const newPlayer = { ...player, position, socketId: socket.id, isReady: isBot };
+room.players.push(newPlayer);
+playerSockets.set(player.id, socket.id);
+
+socket.join(roomId);
+
+console.log('玩家加入房间:', roomId, player.nickname, '当前人数:', room.players.length, isBot ? '(机器人)' : '');
+
+io.to(roomId).emit('room_updated', room);
+io.to(roomId).emit('player_joined', newPlayer);
+io.emit('room_list', Array.from(rooms.values()));
     const newPlayer = { ...player, position, socketId: socket.id, isReady: false };
     room.players.push(newPlayer);
     playerSockets.set(player.id, socket.id);
